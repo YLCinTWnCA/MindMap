@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自製心智圖 (可儲存版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            overscroll-behavior: none;
+        }
+        #viewport {
+            background-image:
+                linear-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+        #viewport.grabbing {
+            cursor: grabbing;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform-origin: top left;
+            will-change: transform;
+        }
+        .draggable-box {
+            position: absolute;
+            cursor: move;
+            user-select: none;
+            min-width: 120px;
+            min-height: 56px;
+            z-index: 10;
+            overflow: visible;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .dragging {
+            z-index: 1000;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        .draggable-box.selected {
+            outline: 2px solid #3b82f6;
+            outline-offset: 2px;
+        }
+        .delete-btn {
+            position: absolute;
+            top: -12px;
+            right: -12px;
+            width: 24px;
+            height: 24px;
+            background-color: #ef4444;
+            color: white;
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.2s, transform 0.2s;
+            transform: scale(0.8);
+            font-size: 14px;
+            line-height: 1;
+            z-index: 12;
+        }
+        .draggable-box:hover .delete-btn {
+            opacity: 1;
+            transform: scale(1);
+        }
+        .selection-box {
+            position: absolute;
+            border: 1px dashed #3b82f6;
+            background-color: rgba(59, 130, 246, 0.2);
+            z-index: 9999;
+            pointer-events: none;
+        }
+        .resize-handle {
+            position: absolute;
+            bottom: -5px;
+            right: -5px;
+            width: 15px;
+            height: 15px;
+            cursor: se-resize;
+            z-index: 11;
+             background: repeating-linear-gradient(-45deg, rgba(0,0,0,0.2), rgba(0,0,0,0.2) 2px, transparent 2px, transparent 4px);
+        }
+        .color-swatch {
+            width: 24px;
+            height: 24px;
+            border-radius: 9999px;
+            cursor: pointer;
+            border: 2px solid #e5e7eb;
+            transition: transform 0.2s;
+        }
+        .color-swatch:hover {
+            transform: scale(1.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen w-screen flex flex-col">
+    <header class="bg-white shadow-md p-4 z-20">
+        <div class="container mx-auto flex flex-wrap items-center justify-center md:justify-between gap-4">
+            <h1 class="text-xl font-bold text-gray-800">心智圖</h1>
+            <div class="flex items-center gap-2">
+                <input type="text" id="textBoxInput" placeholder="輸入文字..." class="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+                <button id="addBoxBtn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition-transform transform hover:scale-105">新增方塊</button>
+            </div>
+            <div id="color-palette" class="flex items-center gap-2">
+                <button class="color-swatch" style="background-color: #ffffff;" data-color="#ffffff" title="白色"></button>
+                <button class="color-swatch" style="background-color: #fecaca;" data-color="#fecaca" title="紅色"></button>
+                <button class="color-swatch" style="background-color: #bfdbfe;" data-color="#bfdbfe" title="藍色"></button>
+                <button class="color-swatch" style="background-color: #bbf7d0;" data-color="#bbf7d0" title="綠色"></button>
+                <button class="color-swatch" style="background-color: #fef08a;" data-color="#fef08a" title="黃色"></button>
+                <button class="color-swatch" style="background-color: #E38EFF;" data-color="#E38EFF" title="紫色"></button>
+
+            </div>
+            <div class="flex items-center gap-2 flex-wrap justify-center">
+                <button id="zoomOutBtn" class="p-2 bg-gray-200 rounded-lg hover:bg-gray-300">-</button>
+                <span id="zoomLevelDisplay">100%</span>
+                <button id="zoomInBtn" class="p-2 bg-gray-200 rounded-lg hover:bg-gray-300">+</button>
+                <button id="resetViewBtn" class="p-2 bg-gray-200 rounded-lg hover:bg-gray-300">重設</button>
+                <button id="saveHtmlBtn" class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg transition-transform transform hover:scale-105">儲存進度</button>
+            </div>
+        </div>
+    </header>
+    <main id="viewport" class="flex-grow">
+        <div id="canvas-container">
+            <div id="canvas"></div>
+        </div>
+    </main>
+<script>
+        // ▼▼▼【修改處】移除PDF相關的變數宣告 ▼▼▼
+        // const { jsPDF } = window.jspdf;
+        // const html2canvas = window.html2canvas;
+
+        const viewport = document.getElementById('viewport');
+        const canvasContainer = document.getElementById('canvas-container');
+        const canvas = document.getElementById('canvas');
+        const textBoxInput = document.getElementById('textBoxInput');
+        const addBoxBtn = document.getElementById('addBoxBtn');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
+        const resetViewBtn = document.getElementById('resetViewBtn');
+        const zoomLevelDisplay = document.getElementById('zoomLevelDisplay');
+        const colorPalette = document.getElementById('color-palette');
+        const saveHtmlBtn = document.getElementById('saveHtmlBtn');
+        // ▼▼▼【修改處】移除 exportPdfBtn 的變數宣告 ▼▼▼
+        // const exportPdfBtn = document.getElementById('exportPdfBtn');
+
+        let activeBox = null, isPanning = false, isSelecting = false, isResizing = false;
+        let zoomLevel = 1, panX = 0, panY = 0;
+        let lastPanX, lastPanY;
+        let boxIdCounter = 0;
+        let nextBoxY = 50;
+        const initialBoxX = 50;
+        const boxSpacingY = 70;
+        let selectedBoxes = new Set();
+        let selectionBox = null;
+        let selectionStart = { x: 0, y: 0 };
+
+        function updateTransform() {
+            canvasContainer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+            zoomLevelDisplay.textContent = `${Math.round(zoomLevel * 100)}%`;
+        }
+
+        function addBox(text, left, top) {
+            const boxText = text || textBoxInput.value.trim();
+            if (boxText === '') return;
+
+            const box = document.createElement('div');
+            box.id = `box-${boxIdCounter++}`;
+            box.className = 'draggable-box bg-white rounded-lg shadow-lg border border-gray-200';
+
+            const allBoxes = canvas.querySelectorAll('.draggable-box');
+            if (allBoxes.length > 0 && !left && !top) {
+                const lastBox = allBoxes[allBoxes.length - 1];
+                const lastBoxTop = parseFloat(lastBox.style.top) || 0;
+                const lastBoxLeft = parseFloat(lastBox.style.left) || 0;
+                const lastBoxModelHeight = lastBox.offsetHeight / zoomLevel; 
+                const spacing = 5;
+
+                box.style.top = `${lastBoxTop + lastBoxModelHeight + spacing}px`;
+                box.style.left = `${lastBoxLeft}px`;
+            } else {
+                box.style.left = left ? `${left}px` : `${(initialBoxX - panX) / zoomLevel}px`;
+                box.style.top = top ? `${top}px` : `${(nextBoxY - panY) / zoomLevel}px`;
+                if (!left && !top) nextBoxY += boxSpacingY;
+            }
+
+            const textSpan = document.createElement('span');
+            textSpan.textContent = boxText;
+            box.appendChild(textSpan);
+
+            const deleteBtn = document.createElement('div');
+            deleteBtn.className = 'delete-btn';
+            deleteBtn.innerHTML = '&times;';
+            box.appendChild(deleteBtn);
+
+            const resizeHandle = document.createElement('div');
+            resizeHandle.className = 'resize-handle';
+            box.appendChild(resizeHandle);
+
+            canvas.appendChild(box);
+            if (!text) {
+                textBoxInput.value = '';
+                textBoxInput.focus();
+            }
+            return box;
+        }
+
+        function clearSelection() {
+            selectedBoxes.forEach(boxId => {
+                const el = document.getElementById(boxId);
+                if (el) el.classList.remove('selected');
+            });
+            selectedBoxes.clear();
+        }
+
+        function dragStart(e) {
+            const targetBox = e.target.closest('.draggable-box');
+            if (targetBox) {
+                activeBox = targetBox;
+                if (!selectedBoxes.has(activeBox.id)) {
+                    if (!e.shiftKey) { clearSelection(); }
+                    selectedBoxes.add(activeBox.id);
+                    activeBox.classList.add('selected');
+                }
+                document.querySelectorAll('.draggable-box').forEach(b => {
+                    if (selectedBoxes.has(b.id)) {
+                         b.classList.add('dragging');
+                    }
+                });
+            }
+        }
+
+        function drag(e) {
+            if (!activeBox || isResizing) return;
+            e.preventDefault();
+            const dx = e.movementX / zoomLevel;
+            const dy = e.movementY / zoomLevel;
+            selectedBoxes.forEach(boxId => {
+                const boxToMove = document.getElementById(boxId);
+                if (boxToMove) {
+                    boxToMove.style.left = `${(parseFloat(boxToMove.style.left) || 0) + dx}px`;
+                    boxToMove.style.top = `${(parseFloat(boxToMove.style.top) || 0) + dy}px`;
+                }
+            });
+        }
+
+        function dragEnd() {
+            if (activeBox) {
+                document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+                activeBox = null;
+            }
+        }
+
+        function startSelection(e) {
+            isSelecting = true;
+            if(!e.shiftKey) clearSelection();
+            const viewportRect = viewport.getBoundingClientRect();
+            selectionStart.x = e.clientX - viewportRect.left;
+            selectionStart.y = e.clientY - viewportRect.top;
+            selectionBox = document.createElement('div');
+            selectionBox.className = 'selection-box';
+            selectionBox.style.left = `${selectionStart.x}px`;
+            selectionBox.style.top = `${selectionStart.y}px`;
+            viewport.appendChild(selectionBox);
+        }
+
+        function updateSelection(e) {
+            if (!isSelecting) return;
+            const viewportRect = viewport.getBoundingClientRect();
+            const currentX = e.clientX - viewportRect.left;
+            const currentY = e.clientY - viewportRect.top;
+            const left = Math.min(selectionStart.x, currentX);
+            const top = Math.min(selectionStart.y, currentY);
+            const width = Math.abs(selectionStart.x - currentX);
+            const height = Math.abs(selectionStart.y - currentY);
+            selectionBox.style.left = `${left}px`;
+            selectionBox.style.top = `${top}px`;
+            selectionBox.style.width = `${width}px`;
+            selectionBox.style.height = `${height}px`;
+            const selectionRect = selectionBox.getBoundingClientRect();
+            canvas.querySelectorAll('.draggable-box').forEach(box => {
+                const boxRect = box.getBoundingClientRect();
+                const isIntersecting = !(selectionRect.right < boxRect.left || selectionRect.left > boxRect.right || selectionRect.bottom < boxRect.top || selectionRect.top > boxRect.bottom);
+                if (isIntersecting) {
+                    if (!selectedBoxes.has(box.id)) {
+                        selectedBoxes.add(box.id);
+                        box.classList.add('selected');
+                    }
+                } else if (!e.shiftKey) {
+                    if (selectedBoxes.has(box.id)) {
+                        selectedBoxes.delete(box.id);
+                        box.classList.remove('selected');
+                    }
+                }
+            });
+        }
+
+        function endSelection() {
+            if (isSelecting) {
+                isSelecting = false;
+                if (selectionBox) { selectionBox.remove(); selectionBox = null; }
+            }
+        }
+        
+        function panMove(e) {
+            if (isPanning) {
+                const dx = e.clientX - lastPanX;
+                const dy = e.clientY - lastPanY;
+                panX += dx;
+                panY += dy;
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+                updateTransform();
+            }
+        }
+
+        function panEnd() {
+            if (isPanning) {
+                isPanning = false;
+                viewport.classList.remove('grabbing');
+            }
+        }
+
+        function handleZoom(e) {
+            e.preventDefault();
+            const scaleAmount = 1.1;
+            const mouseX = e.clientX - viewport.getBoundingClientRect().left;
+            const mouseY = e.clientY - viewport.getBoundingClientRect().top;
+            const worldX = (mouseX - panX) / zoomLevel;
+            const worldY = (mouseY - panY) / zoomLevel;
+            if (e.deltaY < 0) zoomLevel *= scaleAmount;
+            else zoomLevel /= scaleAmount;
+            zoomLevel = Math.max(0.05, Math.min(zoomLevel, 5));
+            panX = mouseX - worldX * zoomLevel;
+            panY = mouseY - worldY * zoomLevel;
+            updateTransform();
+        }
+
+        // ▼▼▼【修改處】移除整個 exportToPDF 函式 ▼▼▼
+
+        function saveHtml() {
+            const docClone = document.cloneNode(true);
+            const newCanvasContainer = docClone.getElementById('canvas-container');
+            const newCanvas = docClone.getElementById('canvas');
+            newCanvas.innerHTML = canvas.innerHTML;
+            const currentTransform = canvasContainer.style.transform;
+            newCanvasContainer.setAttribute('style', `transform: ${currentTransform};`);
+            const htmlString = newCanvasContainer.ownerDocument.documentElement.outerHTML;
+            const blob = new Blob([htmlString], { type: 'text/html' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = '心智圖進度.html';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+        }
+
+        addBoxBtn.addEventListener('click', () => addBox());
+        textBoxInput.addEventListener('keydown', e => { if (e.key === 'Enter') addBox(); });
+        saveHtmlBtn.addEventListener('click', saveHtml);
+        // ▼▼▼【修改處】移除PDF按鈕的事件監聽 ▼▼▼
+        // exportPdfBtn.addEventListener('click', exportToPDF);
+
+        document.addEventListener('mousedown', (e) => {
+            if (e.target.classList.contains('delete-btn')) {
+                const boxToDelete = e.target.closest('.draggable-box');
+                if (boxToDelete) { boxToDelete.remove(); }
+                e.stopPropagation(); return;
+            }
+            if (e.target.classList.contains('resize-handle')) {
+                isResizing = true;
+                activeBox = e.target.closest('.draggable-box');
+                e.stopPropagation(); return;
+            }
+            if (e.button === 2) {
+                isPanning = true;
+                viewport.classList.add('grabbing');
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+                e.preventDefault(); return;
+            }
+            const targetBox = e.target.closest('.draggable-box');
+            if (targetBox) { dragStart(e); return; }
+            if (e.target === viewport || e.target === canvasContainer || e.target === canvas) {
+                 startSelection(e);
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isResizing && activeBox) {
+                const dx = e.movementX / zoomLevel;
+                const dy = e.movementY / zoomLevel;
+                activeBox.style.width = `${Math.max(120, activeBox.offsetWidth + dx)}px`;
+                activeBox.style.height = `${Math.max(56, activeBox.offsetHeight + dy)}px`;
+            } else {
+                drag(e);
+                panMove(e);
+                updateSelection(e);
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            dragEnd();
+            panEnd();
+            endSelection();
+            isResizing = false;
+        });
+        
+        viewport.addEventListener('contextmenu', e => e.preventDefault());
+
+        zoomInBtn.addEventListener('click', () => { zoomLevel *= 1.2; updateTransform(); });
+        zoomOutBtn.addEventListener('click', () => { zoomLevel /= 1.2; updateTransform(); });
+        
+        resetViewBtn.addEventListener('click', () => {
+            zoomLevel = 1;
+            panX = 0;
+            panY = 0;
+            updateTransform();
+        });
+        
+        colorPalette.addEventListener('click', (e) => {
+            if (e.target.classList.contains('color-swatch')) {
+                const color = e.target.dataset.color;
+                selectedBoxes.forEach(boxId => {
+                    const box = document.getElementById(boxId);
+                    if (box) box.style.backgroundColor = color;
+                });
+            }
+        });
+
+        viewport.addEventListener('wheel', handleZoom, { passive: false });
+
+        function initializeMindMap() {
+             const allBoxes = canvas.querySelectorAll('.draggable-box');
+             if (allBoxes.length === 0) {
+                 addBox("請開始使用", (viewport.offsetWidth / 2 - 60), (viewport.offsetHeight / 2 - 28));
+             }
+             let maxId = -1;
+             document.querySelectorAll('.draggable-box').forEach(box => {
+                 if (box.id && box.id.startsWith('box-')) {
+                     const idNum = parseInt(box.id.substring(4));
+                     if (idNum > maxId) {
+                         maxId = idNum;
+                     }
+                 }
+             });
+             boxIdCounter = maxId + 1;
+             
+             const savedTransform = canvasContainer.style.transform;
+             if (savedTransform) {
+                const scaleMatch = savedTransform.match(/scale\((.*?)\)/);
+                const translateMatch = savedTransform.match(/translate\((.*?)px, (.*?)px\)/);
+                if (scaleMatch) zoomLevel = parseFloat(scaleMatch[1]);
+                if (translateMatch) {
+                    panX = parseFloat(translateMatch[1]);
+                    panY = parseFloat(translateMatch[2]);
+                }
+                updateTransform();
+             }
+        }
+        
+        initializeMindMap();
+    </script>
+</body>
+</html>
