@@ -1,9 +1,7 @@
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
+<html lang="zh-Hant"><head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>自製心智圖 (可儲存版)</title>
+    <title>自製心智圖</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -93,7 +91,7 @@
             height: 15px;
             cursor: se-resize;
             z-index: 11;
-             background: repeating-linear-gradient(-45deg, rgba(0,0,0,0.2), rgba(0,0,0,0.2) 2px, transparent 2px, transparent 4px);
+            background: repeating-linear-gradient(-45deg, rgba(0,0,0,0.2), rgba(0,0,0,0.2) 2px, transparent 2px, transparent 4px);
         }
         .color-swatch {
             width: 24px;
@@ -106,6 +104,39 @@
         .color-swatch:hover {
             transform: scale(1.1);
         }
+        /* ▼▼▼【新增】連線點樣式 ▼▼▼ */
+        .connector-point {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background-color: #3b82f6;
+            border: 2px solid white;
+            border-radius: 50%;
+            cursor: crosshair;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 15;
+        }
+        .draggable-box:hover .connector-point {
+            opacity: 1;
+        }
+        .connector-point.top { top: -6px; left: 50%; transform: translateX(-50%); }
+        .connector-point.bottom { bottom: -6px; left: 50%; transform: translateX(-50%); }
+        .connector-point.left { left: -6px; top: 50%; transform: translateY(-50%); }
+        .connector-point.right { right: -6px; top: 50%; transform: translateY(-50%); }
+        /* ▲▲▲【新增】連線點樣式 ▲▲▲ */
+        
+        /* ▼▼▼【新增】SVG畫布樣式 ▼▼▼ */
+        #svg-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            overflow: visible;
+        }
+        /* ▲▲▲【新增】SVG畫布樣式 ▲▲▲ */
     </style>
 </head>
 <body class="bg-gray-100 h-screen w-screen flex flex-col">
@@ -123,7 +154,6 @@
                 <button class="color-swatch" style="background-color: #bbf7d0;" data-color="#bbf7d0" title="綠色"></button>
                 <button class="color-swatch" style="background-color: #fef08a;" data-color="#fef08a" title="黃色"></button>
                 <button class="color-swatch" style="background-color: #E38EFF;" data-color="#E38EFF" title="紫色"></button>
-
             </div>
             <div class="flex items-center gap-2 flex-wrap justify-center">
                 <button id="zoomOutBtn" class="p-2 bg-gray-200 rounded-lg hover:bg-gray-300">-</button>
@@ -135,18 +165,23 @@
         </div>
     </header>
     <main id="viewport" class="flex-grow">
-        <div id="canvas-container">
-            <div id="canvas"></div>
+        <div id="canvas-container" style="transform: ;">
+            <svg id="svg-layer">
+                <defs>
+                    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"></path>
+                    </marker>
+                </defs>
+            </svg>
+            <div id="canvas"><div id="box-0" class="draggable-box bg-white rounded-lg shadow-lg border border-gray-200" style="left: 900px; top: 407.5px;"><span>滾輪縮放、右鍵平移、拖曳點劃線</span><div class="delete-btn">×</div><div class="resize-handle"></div></div></div>
         </div>
     </main>
 <script>
-        // ▼▼▼【修改處】移除PDF相關的變數宣告 ▼▼▼
-        // const { jsPDF } = window.jspdf;
-        // const html2canvas = window.html2canvas;
-
         const viewport = document.getElementById('viewport');
         const canvasContainer = document.getElementById('canvas-container');
         const canvas = document.getElementById('canvas');
+        // ▼▼▼【新增】SVG 圖層變數 ▼▼▼
+        const svgLayer = document.getElementById('svg-layer');
         const textBoxInput = document.getElementById('textBoxInput');
         const addBoxBtn = document.getElementById('addBoxBtn');
         const zoomInBtn = document.getElementById('zoomInBtn');
@@ -155,10 +190,12 @@
         const zoomLevelDisplay = document.getElementById('zoomLevelDisplay');
         const colorPalette = document.getElementById('color-palette');
         const saveHtmlBtn = document.getElementById('saveHtmlBtn');
-        // ▼▼▼【修改處】移除 exportPdfBtn 的變數宣告 ▼▼▼
-        // const exportPdfBtn = document.getElementById('exportPdfBtn');
 
         let activeBox = null, isPanning = false, isSelecting = false, isResizing = false;
+        // ▼▼▼【新增】線條繪製相關變數 ▼▼▼
+        let isDrawingLine = false;
+        let lineStartInfo = null;
+        let previewLine = null;
         let zoomLevel = 1, panX = 0, panY = 0;
         let lastPanX, lastPanY;
         let boxIdCounter = 0;
@@ -172,6 +209,8 @@
         function updateTransform() {
             canvasContainer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
             zoomLevelDisplay.textContent = `${Math.round(zoomLevel * 100)}%`;
+            // ▼▼▼【修改處】縮放或平移時更新線條 ▼▼▼
+            updateAllLines();
         }
 
         function addBox(text, left, top) {
@@ -189,7 +228,6 @@
                 const lastBoxLeft = parseFloat(lastBox.style.left) || 0;
                 const lastBoxModelHeight = lastBox.offsetHeight / zoomLevel; 
                 const spacing = 5;
-
                 box.style.top = `${lastBoxTop + lastBoxModelHeight + spacing}px`;
                 box.style.left = `${lastBoxLeft}px`;
             } else {
@@ -210,6 +248,15 @@
             const resizeHandle = document.createElement('div');
             resizeHandle.className = 'resize-handle';
             box.appendChild(resizeHandle);
+            
+            // ▼▼▼【新增】為方塊加上四個連線點 ▼▼▼
+            ['top', 'bottom', 'left', 'right'].forEach(pos => {
+                const point = document.createElement('div');
+                point.className = `connector-point ${pos}`;
+                point.dataset.position = pos;
+                box.appendChild(point);
+            });
+            // ▲▲▲【新增】連線點 ▲▲▲
 
             canvas.appendChild(box);
             if (!text) {
@@ -256,6 +303,8 @@
                     boxToMove.style.top = `${(parseFloat(boxToMove.style.top) || 0) + dy}px`;
                 }
             });
+            // ▼▼▼【修改處】移動方塊時更新線條 ▼▼▼
+            updateAllLines();
         }
 
         function dragEnd() {
@@ -350,16 +399,18 @@
             updateTransform();
         }
 
-        // ▼▼▼【修改處】移除整個 exportToPDF 函式 ▼▼▼
-
         function saveHtml() {
             const docClone = document.cloneNode(true);
             const newCanvasContainer = docClone.getElementById('canvas-container');
-            const newCanvas = docClone.getElementById('canvas');
-            newCanvas.innerHTML = canvas.innerHTML;
+            
+            // 手動複製canvas和svg內容，確保內聯樣式被保留
+            newCanvasContainer.querySelector('#canvas').innerHTML = canvas.innerHTML;
+            newCanvasContainer.querySelector('#svg-layer').innerHTML = svgLayer.innerHTML;
+
             const currentTransform = canvasContainer.style.transform;
             newCanvasContainer.setAttribute('style', `transform: ${currentTransform};`);
-            const htmlString = newCanvasContainer.ownerDocument.documentElement.outerHTML;
+
+            const htmlString = docClone.documentElement.outerHTML;
             const blob = new Blob([htmlString], { type: 'text/html' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -370,18 +421,145 @@
             URL.revokeObjectURL(a.href);
         }
 
+        // ▼▼▼【以下為新增的線條繪製相關函式】▼▼▼
+        
+        function getConnectorPointCoords(boxId, position) {
+            const box = document.getElementById(boxId);
+            if (!box) return null;
+
+            const x = parseFloat(box.style.left);
+            const y = parseFloat(box.style.top);
+            const w = box.offsetWidth;
+            const h = box.offsetHeight;
+
+            switch (position) {
+                case 'top': return { x: x + w / 2, y: y };
+                case 'bottom': return { x: x + w / 2, y: y + h };
+                case 'left': return { x: x, y: y + h / 2 };
+                case 'right': return { x: x + w, y: y + h / 2 };
+                default: return null;
+            }
+        }
+
+        function updateAllLines() {
+            const lines = svgLayer.querySelectorAll('path');
+            lines.forEach(line => {
+                const startBoxId = line.dataset.startBox;
+                const startPos = line.dataset.startPos;
+                const endBoxId = line.dataset.endBox;
+                const endPos = line.dataset.endPos;
+
+                const startCoords = getConnectorPointCoords(startBoxId, startPos);
+                const endCoords = getConnectorPointCoords(endBoxId, endPos);
+
+                if (startCoords && endCoords) {
+                    // 使用曲線繪製，讓線條更美觀
+                    const dx = endCoords.x - startCoords.x;
+                    const dy = endCoords.y - startCoords.y;
+                    const path = `M ${startCoords.x} ${startCoords.y} C ${startCoords.x + dx * 0.5} ${startCoords.y}, ${endCoords.x - dx * 0.5} ${endCoords.y}, ${endCoords.x} ${endCoords.y}`;
+                    line.setAttribute('d', path);
+                } else {
+                    // 如果找不到對應的方塊，移除這條線
+                    line.remove();
+                }
+            });
+        }
+
+        function startLineDrawing(e) {
+            e.stopPropagation();
+            isDrawingLine = true;
+            const startPoint = e.target;
+            const startBox = startPoint.closest('.draggable-box');
+            lineStartInfo = {
+                boxId: startBox.id,
+                position: startPoint.dataset.position
+            };
+            
+            const startCoords = getConnectorPointCoords(lineStartInfo.boxId, lineStartInfo.position);
+
+            previewLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            previewLine.setAttribute('stroke', '#6b7280');
+            previewLine.setAttribute('stroke-width', '2');
+            previewLine.setAttribute('fill', 'none');
+            previewLine.setAttribute('marker-end', 'url(#arrow)');
+            
+            const worldMouse = getMouseWorldPos(e);
+            const path = `M ${startCoords.x} ${startCoords.y} C ${startCoords.x} ${startCoords.y}, ${worldMouse.x} ${worldMouse.y}, ${worldMouse.x} ${worldMouse.y}`;
+            previewLine.setAttribute('d', path);
+            svgLayer.appendChild(previewLine);
+        }
+
+        function getMouseWorldPos(e) {
+            const viewportRect = viewport.getBoundingClientRect();
+            const mouseX = e.clientX - viewportRect.left;
+            const mouseY = e.clientY - viewportRect.top;
+            const worldX = (mouseX - panX) / zoomLevel;
+            const worldY = (mouseY - panY) / zoomLevel;
+            return { x: worldX, y: worldY };
+        }
+
+        function updatePreviewLine(e) {
+            if (!isDrawingLine || !previewLine) return;
+
+            const startCoords = getConnectorPointCoords(lineStartInfo.boxId, lineStartInfo.position);
+            const worldMouse = getMouseWorldPos(e);
+            
+            const dx = worldMouse.x - startCoords.x;
+            const path = `M ${startCoords.x} ${startCoords.y} C ${startCoords.x + dx * 0.5} ${startCoords.y}, ${worldMouse.x - dx * 0.5} ${worldMouse.y}, ${worldMouse.x} ${worldMouse.y}`;
+            previewLine.setAttribute('d', path);
+        }
+
+        function endLineDrawing(e) {
+            if (!isDrawingLine) return;
+            isDrawingLine = false;
+
+            const endPoint = e.target;
+            if (endPoint.classList.contains('connector-point')) {
+                const endBox = endPoint.closest('.draggable-box');
+                if (endBox && endBox.id !== lineStartInfo.boxId) {
+                    // 連線成功，將預覽線變為永久線
+                    previewLine.dataset.startBox = lineStartInfo.boxId;
+                    previewLine.dataset.startPos = lineStartInfo.position;
+                    previewLine.dataset.endBox = endBox.id;
+                    previewLine.dataset.endPos = endPoint.dataset.position;
+                } else {
+                    previewLine.remove();
+                }
+            } else {
+                // 沒有連到有效的點，移除預覽線
+                previewLine.remove();
+            }
+            
+            previewLine = null;
+            lineStartInfo = null;
+            updateAllLines();
+        }
+        
+        // ▲▲▲【線條繪製函式結束】▲▲▲
+
         addBoxBtn.addEventListener('click', () => addBox());
         textBoxInput.addEventListener('keydown', e => { if (e.key === 'Enter') addBox(); });
         saveHtmlBtn.addEventListener('click', saveHtml);
-        // ▼▼▼【修改處】移除PDF按鈕的事件監聽 ▼▼▼
-        // exportPdfBtn.addEventListener('click', exportToPDF);
 
         document.addEventListener('mousedown', (e) => {
+            // ▼▼▼【修改處】處理刪除按鈕和線條刪除 ▼▼▼
             if (e.target.classList.contains('delete-btn')) {
                 const boxToDelete = e.target.closest('.draggable-box');
-                if (boxToDelete) { boxToDelete.remove(); }
+                if (boxToDelete) { 
+                    const boxId = boxToDelete.id;
+                    // 刪除與此方塊相關的所有線條
+                    svgLayer.querySelectorAll(`path[data-start-box="${boxId}"], path[data-end-box="${boxId}"]`)
+                        .forEach(line => line.remove());
+                    boxToDelete.remove(); 
+                }
                 e.stopPropagation(); return;
             }
+            // ▼▼▼【新增】處理連線點的點擊 ▼▼▼
+            if (e.target.classList.contains('connector-point')) {
+                startLineDrawing(e);
+                return;
+            }
+
             if (e.target.classList.contains('resize-handle')) {
                 isResizing = true;
                 activeBox = e.target.closest('.draggable-box');
@@ -402,11 +580,19 @@
         });
 
         document.addEventListener('mousemove', (e) => {
+             // ▼▼▼【新增】更新預覽線 ▼▼▼
+            if (isDrawingLine) {
+                updatePreviewLine(e);
+                return;
+            }
+
             if (isResizing && activeBox) {
                 const dx = e.movementX / zoomLevel;
                 const dy = e.movementY / zoomLevel;
                 activeBox.style.width = `${Math.max(120, activeBox.offsetWidth + dx)}px`;
                 activeBox.style.height = `${Math.max(56, activeBox.offsetHeight + dy)}px`;
+                // ▼▼▼【修改處】改變大小時更新線條 ▼▼▼
+                updateAllLines();
             } else {
                 drag(e);
                 panMove(e);
@@ -414,7 +600,11 @@
             }
         });
 
-        document.addEventListener('mouseup', () => {
+        document.addEventListener('mouseup', (e) => {
+            // ▼▼▼【新增】結束線條繪製 ▼▼▼
+            if (isDrawingLine) {
+                endLineDrawing(e);
+            }
             dragEnd();
             panEnd();
             endSelection();
@@ -448,8 +638,21 @@
         function initializeMindMap() {
              const allBoxes = canvas.querySelectorAll('.draggable-box');
              if (allBoxes.length === 0) {
-                 addBox("請開始使用", (viewport.offsetWidth / 2 - 60), (viewport.offsetHeight / 2 - 28));
+                 addBox("滾輪縮放、右鍵平移、拖曳點劃線", (viewport.offsetWidth / 2 - 60), (viewport.offsetHeight / 2 - 28));
+             } else {
+                // ▼▼▼【新增】為載入的方塊補上連線點 ▼▼▼
+                allBoxes.forEach(box => {
+                    if (!box.querySelector('.connector-point')) {
+                         ['top', 'bottom', 'left', 'right'].forEach(pos => {
+                            const point = document.createElement('div');
+                            point.className = `connector-point ${pos}`;
+                            point.dataset.position = pos;
+                            box.appendChild(point);
+                        });
+                    }
+                });
              }
+
              let maxId = -1;
              document.querySelectorAll('.draggable-box').forEach(box => {
                  if (box.id && box.id.startsWith('box-')) {
@@ -470,11 +673,12 @@
                     panX = parseFloat(translateMatch[1]);
                     panY = parseFloat(translateMatch[2]);
                 }
-                updateTransform();
              }
+             // ▼▼▼【修改處】初始化和更新視圖/線條 ▼▼▼
+             updateTransform();
         }
         
         initializeMindMap();
     </script>
-</body>
-</html>
+
+</body></html>
